@@ -224,7 +224,7 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
         vocab, _ = initialize_vocabulary(vocabulary_path)
 
         corpus_data = gzip.GzipFile(data_path, mode='r').read().decode().split('\n')
-        with open(target_path, mode="w", encoding='UTF-8') as tokens_file:
+        with gzip.open(target_path, mode="wb") as tokens_file:
             counter = 0
             for line in corpus_data:
                 counter += 1
@@ -232,7 +232,11 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                     print("  tokenizing line %d" % counter)
                 token_ids = sentence_to_token_ids(line, vocab, tokenizer,
                                         normalize_digits, normalize_char)
-                tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
+                to_write_data = " ".join([str(tok) for tok in token_ids])
+                if counter != len(corpus_data):
+                    tokens_file.write((to_write_data + "\n").encode())
+                else:
+                    tokens_file.write(to_write_data.encode())
 
 max_vocabulary_size = 12000
 create_vocabulary(vocabulary_path, data_path, max_vocabulary_size)
