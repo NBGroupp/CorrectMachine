@@ -25,29 +25,29 @@ import os
 import re
 import tarfile
 import pickle
+import random
 
 from six.moves import urllib
 
 data_path = sys.argv[1]
 target_path = sys.argv[2]
 vocabulary_path = sys.argv[3]
-pickle_path = sys.argv[4]
 
 # Special vocabulary symbols - we always put them at the start.
-_PAD = "_PAD"
-_GO = "_GO"
-_EOS = "_EOS"
+# _PAD = "_PAD"
+# _GO = "_GO"
+# _EOS = "_EOS"
 _UNK = "_UNK"
-_START_VOCAB = [_PAD, _GO, _EOS, _UNK]
+_START_VOCAB = [_UNK]
 
 # Regular expressions used to tokenize.
 #_WORD_SPLIT = re.compile("(【。，！？、“‘：；）（】)")
 _DIGIT_RE = re.compile(r"[\d]")
 _CHAR_RE = re.compile(r"[A-Za-zＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ]+")
 
-PAD_ID = 0
-GO_ID = 1
-EOS_ID = 2
+#PAD_ID = 0
+#GO_ID = 1
+#EOS_ID = 2
 UNK_ID = 3
 
 def clean_corpus(data_path, corpus_data):
@@ -133,14 +133,15 @@ def create_vocabulary(vocabulary_path, data_path, max_vocabulary_size, tokenizer
                 else:
                     vocab[word] = 1
         vocab_list = _START_VOCAB + sorted(vocab, key=vocab.get, reverse=True)
-        #print(vocab)
         if len(vocab_list) > max_vocabulary_size:
             vocab_list = vocab_list[:max_vocabulary_size]
-        with open(pickle_path, 'wb') as f:
-            pickle.dump(vocab_list, f)
-        with open(vocabulary_path, mode="w", encoding='UTF-8') as vocab_file:
+        with gzip.open(vocabulary_path, mode="wb") as vocab_file:
             for w in vocab_list:
-                vocab_file.write(w + "\n")
+                vocab_file.write((w + "\n").encode())
+        return vocab_list
+    else:
+        vocab_list = gzip.GzipFile(vocabulary_path, mode='r').read().decode().split('\n')
+        return vocab_list
 
 def initialize_vocabulary(vocabulary_path):
     """Initialize vocabulary from file.
@@ -162,9 +163,7 @@ def initialize_vocabulary(vocabulary_path):
     ValueError: if the provided vocabulary_path does not exist.
     """
     if os.path.exists(vocabulary_path):
-        rev_vocab = []
-        with open(vocabulary_path, mode="r", encoding='UTF-8') as f:
-            rev_vocab.extend(f.readlines())
+        rev_vocab = gzip.GzipFile(vocabulary_path, mode='r').read().decode().split('\n')
         rev_vocab = [line.strip() for line in rev_vocab]
         vocab = dict([(x, y) for (y, x) in enumerate(rev_vocab)])
         return vocab, rev_vocab
@@ -218,6 +217,10 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
       if None, basic_tokenizer will be used.
     normalize_digits: Boolean; if true, all digits are replaced by 0s.
     normalize_char: Boolean; if true, all chars are replaced by 0s.
+
+  Return:
+    tokenized_corpus: corpus that tokenized as saved into a list.
+    vocab: vocabulary list
     """
     if not os.path.exists(target_path):
         print("Tokenizing data in %s" % data_path)
@@ -226,6 +229,7 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
         corpus_data = gzip.GzipFile(data_path, mode='r').read().decode().split('\n')
         with gzip.open(target_path, mode="wb") as tokens_file:
             counter = 0
+            tokenized_corpus = []
             for line in corpus_data:
                 counter += 1
                 if counter % 100000 == 0:
@@ -233,11 +237,137 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                 token_ids = sentence_to_token_ids(line, vocab, tokenizer,
                                         normalize_digits, normalize_char)
                 to_write_data = " ".join([str(tok) for tok in token_ids])
+                tokenized_corpus.append(to_write_data)
                 if counter != len(corpus_data):
                     tokens_file.write((to_write_data + "\n").encode())
                 else:
                     tokens_file.write(to_write_data.encode())
+            return tokenized_corpus, vocab
+    else:
+        tokenized_corpus = gzip.GzipFile(target_path, mode='r').read().decode().split('\n')
+        vocab, _ = initialize_vocabulary(vocabulary_path)
+        return tokenized_corpus, vocab
+
+
+def get_word(index, vocab):
+    """ Get the word to use in functions of generating error to produce error.
+        Guarantee word is Chinese character.
+        Args:
+            index: current index
+            length: length of a list
+        returns:
+            word
+    """
+    length = len(vocab)
+    if index < 10:
+        find_range = 5
+    elif index < 100:
+        find_range = 50
+    else:
+        find_range = 100
+
+    start = index - find_range
+    if start < 0:
+        start = 0
+    end = index + find_range
+    if end > length:
+        end = length
+
+    word = vocab[random.randrange(start, end)]
+    return word
+
+def mix_error(data, vocab, method):
+    """ Generating mistakes function
+        Args:
+            data: corpus, list of sentences
+            vocab: vocabulary that drops four special characters as start
+            method: 0 - missing words method
+                    1 - extra words method
+                    2 - wrong words method
+        returns:
+            results: corpus with one wrong type,
+                     a list which elements are sentences
+    """
+    results = []
+    total_sentences = len(data)
+    for i, sentence in enumerate(data):
+        # one sentence
+        length = len(sentence)
+        if length is 0:
+            continue
+        print('%.2f %%' % (i/total_sentences*100), end='\r')
+        while True:
+            # get a Chinese character index
+            random_pos = random.randrange(0, length)
+            if '\u4e00' <= sentence[random_pos] <= '\u9fff':
+                break
+        # to processing word's index in vocabulary
+        to_process_word_index = vocab.index(sentence[random_pos])
+
+        # generate mistake
+        if method is 0:
+            # missing words mistake
+            wrong_sentence = sentence[:random_pos] + sentence[random_pos+1:]
+        else:
+            # find a word in vocabulary
+            error_word = get_word(to_process_word_index, vocab)
+            if method is 1:
+                # extra words mistake
+                wrong_sentence = \
+                    sentence[:random_pos] + error_word + sentence[random_pos:]
+            else:
+                # wrong words mistake
+                wrong_sentence = sentence[:random_pos] \
+                                 + error_word \
+                                 + sentence[random_pos+1:]
+
+        results.append(wrong_sentence)
+    return results
+
+def generate_corpus(data_path, target_path, vocabulary_path, vocab,
+                    tokenizer=None, normalize_digits=True, normalize_char=True):
+
+    """ Main process function
+
+        generate three .txt files containing one error of above,
+        in every new file sentence order remain same as origin corpus.
+
+    """
+
+    tokenized_corpus, _ = \
+        data_to_token_ids(data_path, target_path, vocabulary_path,
+                      tokenizer=None, normalize_digits=True, normalize_char=True)
+
+    total = len(tokenized_corpus)
+    if not os.path.exists('target_train.gz'):
+        with gzip.open('target_train.gz', 'wb') as f:
+            f.write('\n'.join(tokenized_corpus[:int(total/3*2)]).encode())
+    if not os.path.exists('target_dev.gz'):
+        with gzip.open('target_dev.gz', 'wb') as f:
+            f.write('\n'.join(tokenized_corpus[int(total/3*2):]).encode())
+
+    corpus_data = gzip.GzipFile(data_path, mode='r').read().decode().split('\n')
+
+    for i in range(3):
+        print('processing error %d...' % i)
+        wrong_corpus = mix_error(corpus_data, vocab, i)
+        wrong_total = len(wrong_corpus)
+        if wrong_total != total:
+            print('wrong length of the wrong corpus')
+            print(wrong_total, total)
+            sys.exit()
+        wrong_corpus_train = wrong_corpus[:int(total/3*2)]
+        wrong_corpus_dev = wrong_corpus[int(total/3*2):]
+        with gzip.open('error'+str(i)+'_train.gz', 'wb') as f:
+            f.write('\n'.join(wrong_corpus_train).encode())
+        with gzip.open('error'+str(i)+'_dev.gz', 'wb') as f:
+            f.write('\n'.join(wrong_corpus_dev).encode())
+        data_to_token_ids('error'+str(i)+'_train.gz',
+                                     'error'+str(i)+'_train_token.gz', vocabulary_path)
+        data_to_token_ids('error'+str(i)+'_dev.gz',
+                                     'error'+str(i)+'_dev_token.gz', vocabulary_path)
+        print('error'+str(i)+'.gz'+' finished')
 
 max_vocabulary_size = 12000
-create_vocabulary(vocabulary_path, data_path, max_vocabulary_size)
-data_to_token_ids(data_path, target_path, vocabulary_path)
+vocab_list = create_vocabulary(vocabulary_path, data_path, max_vocabulary_size)
+generate_corpus(data_path, target_path, vocabulary_path, vocab_list)
