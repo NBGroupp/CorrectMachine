@@ -1,25 +1,34 @@
 # coding: utf-8
 
+import os
 import re
 import sys
 import gzip
 import random
 
+import jieba
+
 
 _DIGIT_RE = re.compile("[\d１２３４５６７８９０]+")
 _CHAR_RE = re.compile("[A-Za-zＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ]+")
+_PUNC_RE = re.compile("[＂＃＄％＆＇（）＊＋，－／：；＜＝＞＠［＼］＾＿｀｛｜｝～｟｠｢｣､\u3000、〃〈〉《》「」『』【】〔〕〖〗〘〙〚〛〜〝〞〟〰〾〿–—‘’‛“”„‟…‧﹏﹑﹔·！？｡。!\"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]")
+
+# error will be mix into corpus data with below percent
+mix_error_percent = (0.05, 0.10, 0.20, 0.40)
 
 
 def _is_chinese(c):
     return '\u4e00' <= c <= '\u9fff'
 
 
-def process_corpus_data(corpus_data, normalize_char=True, normalize_digits=True):
+def process_corpus_data(corpus_data, normalize_char=True,
+                        normalize_digits=True, normalize_punctuation=True):
     """ Open a gzip file and return data.
         Args:
             corpus_data: the original corpus data in list format
             normalize_digits: if true, all digits are replaced by 0
             normalize_char: if true, all chars are replaced by a
+            normalize_punctuation: if true, all punctuations are replaced by .
         Return:
             processed data in tuple format
     """
@@ -27,6 +36,7 @@ def process_corpus_data(corpus_data, normalize_char=True, normalize_digits=True)
     for one in corpus_data:
         one = _DIGIT_RE.sub('0', one) if normalize_digits else one
         one = _CHAR_RE.sub('a', one) if normalize_char else one
+        one = _PUNC_RE.sub('.', one) if normalize_punctuation else one
         p_corpus_data.append(one)
     return tuple(p_corpus_data)
 
@@ -143,7 +153,7 @@ def _get_word(index, vocab):
     return word
 
 
-def create_error_corpus(corpus_data, vocab,
+def create_error_corpus(corpus_data, vocab, mix_percent=1,
                         max_error_num_in_sentence=5, log=True):
     """ Create error corpus with three types of errors:
             missing characters, extra characters, wrong characters
@@ -154,6 +164,7 @@ def create_error_corpus(corpus_data, vocab,
         Args:
             corpus_data: original data in list format
             vocab: list of vocabulary
+            mix_percent: the error sentences' percent in the whole corpus data
             max_error_num_in_sentence: limit of errors'number in one sentence
             log: if true, create a file to record mix process
         Return:
@@ -161,16 +172,31 @@ def create_error_corpus(corpus_data, vocab,
             corpus_data: right corpus in list format
     """
     total_sentences = len(corpus_data)
-    if log: mix_log = open('mix_log.txt', 'w')
+    if log: mix_log = open('mix_log_{}.txt'.format(mix_percent*100), 'w')
 
-    error_corpus = []
+    error_corpus = list(corpus_data)
     no_mix_num = 0  # record no mix error sentence
-    for i, sentence in enumerate(corpus_data):
+    random_sentence_index = set()
+    error_sentence_index = set()
+    if mix_percent <= 0.5:
+        while len(random_sentence_index) < total_sentences * mix_percent:
+            random_sentence_index.add(random.randrange(0, total_sentences))
+        error_sentence_index = random_sentence_index
+    else:
+        while len(random_sentence_index) < total_sentences * (1-mix_percent):
+            random_sentence_index.add(random.randrange(0, total_sentences))
+        error_sentence_index = {one for one in range(total_sentences)
+                                if one not in random_sentence_index}
+
+    for i, s_index in enumerate(error_sentence_index):
+        sentence = error_corpus[s_index]
         # set random error number
         chinese_character_number = sum(map(_is_chinese, sentence))
-        max_error_num = min(max_error_num_in_sentence, int(chinese_character_number/10))
+        max_error_num = min(max_error_num_in_sentence,
+                            int(chinese_character_number/10))
         error_num = random.randrange(0, max(1, max_error_num+1))
-        print('Mix error: %.2f %%' % (i/total_sentences*100), end='\r')
+        print('Mix error %s : %.2f %%' % (
+            str(mix_percent*100)+'%', i/len(error_sentence_index)*100), end='\r')
         for _ in range(0, error_num+1):
             # set random error type
             error_type = random.randrange(0, 4)
@@ -207,52 +233,116 @@ def create_error_corpus(corpus_data, vocab,
         if log: mix_log.write('\n')
         if sentence == corpus_data[i]:
             no_mix_num += 1
-        error_corpus.append(sentence)
-    print('Mix error: Done.          ')
+        error_corpus[s_index] = sentence
+    print('Mix error %s: Done.          ' % (str(mix_percent*100)+'%'))
     if log:
         mix_log.seek(0)
-        mix_log.write('Correct: {} / {}\n'.format(no_mix_num, len(corpus_data)))
+        mix_log.write('Correct: {} / {}\n'.format(no_mix_num, len(corpus_data)*mix_percent))
         mix_log.close()
     return error_corpus, corpus_data
+
+def cutting_words(corpus, fill='_'):
+    ccorpus = []
+    total = len(corpus)
+    for i, s in enumerate(corpus):
+        ccorpus.append(fill.join(jieba.cut(s)))
+        print('Cutting words: %.2f%%' % ((i+1)/total*100), end='\r')
+    return ccorpus
+
+def test_error_percent(error_corpus, right_corpus):
+    """ return the error sentences' percent """
+    total = len(right_corpus)
+    error = sum([1 for i, j in zip(error_corpus, right_corpus) if i != j])
+    return error / total
 
 def generate_data(data_path, max_vocabulary_size):
     corpus_data = clean_corpus(data_path)
     corpus_data = process_corpus_data(corpus_data)
     vocab_l = create_vocabulary(corpus_data, max_vocabulary_size)
-    oerror_corpus, oright_corpus = create_error_corpus(corpus_data, vocab_l,
-                                                       max_error_num_in_sentence=3)
-    # insert space into sentence
-    error_corpus = []
-    for one in oerror_corpus:
-        n_one = ' '.join(one)
-        error_corpus.append(n_one)
-    right_corpus = []
-    for one in oright_corpus:
-        n_one = ' '.join(one)
-        right_corpus.append(n_one)
 
-    data_len = len(error_corpus)
-    # split into dev(0.2), val(0.2), train(0.6)
-    two_split_index = int(data_len/10*2)
-    four_split_index = int(data_len/10*4)
-    dev_error_corpus = error_corpus[0:two_split_index]
-    dev_right_corpus = right_corpus[0:two_split_index]
-    val_error_corpus = error_corpus[two_split_index: four_split_index]
-    val_right_corpus = right_corpus[two_split_index: four_split_index]
-    train_error_corpus = error_corpus[four_split_index:]
-    train_right_corpus = right_corpus[four_split_index:]
-    with open('error.dev.'+str(len(dev_error_corpus)), 'w') as f:
-        f.write('\n'.join(dev_error_corpus))
-    with open('error.val.'+str(len(val_error_corpus)), 'w') as f:
-        f.write('\n'.join(val_error_corpus))
-    with open('error.train.'+str(len(train_error_corpus)), 'w') as f:
-        f.write('\n'.join(train_error_corpus))
-    with open('right.dev.'+str(len(dev_right_corpus)), 'w') as f:
-        f.write('\n'.join(dev_right_corpus))
-    with open('right.val.'+str(len(val_right_corpus)), 'w') as f:
-        f.write('\n'.join(val_right_corpus))
-    with open('right.train.'+str(len(train_right_corpus)), 'w') as f:
-        f.write('\n'.join(train_right_corpus))
+    # insert '_' between words in each sentence
+    right_corpus = cutting_words(corpus_data)
+    right_corpus = [' '.join(one) for one in right_corpus]
+
+    oerror_corpus, oright_corpus = create_error_corpus(
+        corpus_data, vocab_l, max_error_num_in_sentence=3)
+    # insert '_' between words in each sentence
+    oerror_corpus = cutting_words(oerror_corpus)
+    oerror_corpus = [' '.join(one) for one in oerror_corpus]
+
+    log = open('corpus_info.txt', 'w')
+    print('Mix error percents is: ' + str(mix_error_percent))
+    for percent in mix_error_percent:
+
+        data_dir = os.path.join('.', str(percent*100)+'%')
+        if not os.path.exists(data_dir):
+            os.mkdir(data_dir)
+
+        # assembly the wrong corpus
+        total_sentences = len(oerror_corpus)
+        random_sentence_index = set()
+        error_sentence_index = set()
+        if percent <= 0.5:
+            while len(random_sentence_index) < total_sentences * percent:
+                random_sentence_index.add(random.randrange(0, total_sentences))
+            error_sentence_index = random_sentence_index
+        else:
+            while len(random_sentence_index) < total_sentences * (1-percent):
+                random_sentence_index.add(random.randrange(0, total_sentences))
+            error_sentence_index = {one for one in range(total_sentences)
+                                    if one not in random_sentence_index}
+        error_corpus = [1 for i in range(total_sentences)]
+        for i in range(total_sentences):
+            if i in error_sentence_index:
+                error_corpus[i] = oerror_corpus[i]
+            else:
+                error_corpus[i] = right_corpus[i]
+
+        data_len = len(error_corpus)
+        # split into dev(0.2), val(0.2), train(0.6)
+        two_split_index = int(data_len/10*2)
+        four_split_index = int(data_len/10*4)
+        dev_error_corpus = error_corpus[0:two_split_index]
+        dev_right_corpus = right_corpus[0:two_split_index]
+        val_error_corpus = error_corpus[two_split_index: four_split_index]
+        val_right_corpus = right_corpus[two_split_index: four_split_index]
+        train_error_corpus = error_corpus[four_split_index:]
+        train_right_corpus = right_corpus[four_split_index:]
+
+        # test error percent
+        dev_corpus_ep = test_error_percent(dev_error_corpus, dev_right_corpus)
+        log.write('========================================================\n')
+        log.write('Data Set: %s\n' % (str(percent*100)+'%'))
+        log.write('Dev Corpus:\nsentence number: %d\terror percent: %.2f%%\n\n'
+                 % (len(dev_error_corpus), dev_corpus_ep*100))
+        val_corpus_ep = test_error_percent(val_error_corpus, val_right_corpus)
+        log.write('Val Corpus:\nsentence number: %d\terror percent: %.2f%%\n\n'
+                 % (len(val_error_corpus), val_corpus_ep*100))
+        train_corpus_ep = test_error_percent(train_error_corpus, train_right_corpus)
+        log.write('Train Corpus:\nsentence number: %d\terror percent: %.2f%%\n\n'
+                 % (len(train_error_corpus), train_corpus_ep*100))
+        log.write('========================================================\n\n')
+
+        # save corpus
+        with open(os.path.join(
+            data_dir, 'error.dev.'+str(len(dev_error_corpus))), 'w') as f:
+            f.write('\n'.join(dev_error_corpus))
+        with open(os.path.join(
+            data_dir, 'error.val.'+str(len(val_error_corpus))), 'w') as f:
+            f.write('\n'.join(val_error_corpus))
+        with open(os.path.join(
+            data_dir, 'error.train.'+str(len(train_error_corpus))), 'w') as f:
+            f.write('\n'.join(train_error_corpus))
+        with open(os.path.join(
+            data_dir, 'right.dev.'+str(len(dev_right_corpus))), 'w') as f:
+            f.write('\n'.join(dev_right_corpus))
+        with open(os.path.join(
+            data_dir, 'right.val.'+str(len(val_right_corpus))), 'w') as f:
+            f.write('\n'.join(val_right_corpus))
+        with open(os.path.join(
+            data_dir, 'right.train.'+str(len(train_right_corpus))), 'w') as f:
+            f.write('\n'.join(train_right_corpus))
+    log.close()
 
 
 if __name__ == '__main__':
