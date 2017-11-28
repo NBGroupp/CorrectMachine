@@ -22,6 +22,7 @@ mix_error_percent = (0.05, 0.10, 0.20, 0.40)
 def _is_chinese(c):
     return '\u4e00' <= c <= '\u9fff'
 
+
 def process_corpus_data(corpus_data,
                         normalize_char=True, normalize_digits=True,
                         normalize_punctuation=True, normalize_others=True):
@@ -70,7 +71,7 @@ def clean_corpus(data_path, replace=False):
             continue
         else:
             have_ch_character = sum([1 for c in sentence if _is_chinese(c)])
-            if have_ch_character <=3:
+            if have_ch_character <= 3:
                 # too few chinese characters
                 print('Dropping sentence: '+sentence, end='\r')
                 drop += 1
@@ -84,7 +85,7 @@ def clean_corpus(data_path, replace=False):
             data = gzip.compress(data.encode())
             with open(data_path, 'wb') as f:
                 f.write(data)
-        print('Clean origin corpus: {}, drop sentence: {}'.\
+        print('Clean origin corpus: {}, drop sentence: {}'.
               format(data_path, drop))
     else:
         print('Origin corpus is clean')
@@ -95,7 +96,8 @@ def basic_tokenizer(sentence):
     """ basic tokenizer: split the sentence into a list of tokens. """
     words = []
     for w in sentence:
-        if(w != '\n' and w != ' ' and w != '\t' and w != '\r' and w != '\f' and w != '\v'):
+        if(w != '\n' and w != ' ' and w != '\t'
+           and w != '\r' and w != '\f' and w != '\v'):
             words.extend(w)
     return [w for w in words if w]
 
@@ -176,8 +178,10 @@ def create_error_corpus(corpus_data, vocab,
         Every error character is supposed to be Chinese character. And
         errors in one sentence supposed not to be close to each other.
 
-        This method will create a file with mix error info
-        and save a list:
+        This method will create a list with sentences' error information
+            error_l: each item in it is [missing_num, extra_num, wrong_num]
+
+        This method will also create a list with mix error infomation
             predict_l: the right predict supposed to make
         For example:
             The original sentence which is the first sentence in the corpus is:
@@ -198,6 +202,8 @@ def create_error_corpus(corpus_data, vocab,
         Return:
             error_corpus_data: in list format
             corpus_data: right corpus in list format
+            predict_l
+            error_l
     """
     total_sentences = len(corpus_data)
     mix_log = open('mix_log_{}.txt'.format(mix_percent*100), 'w')
@@ -217,6 +223,7 @@ def create_error_corpus(corpus_data, vocab,
                                 if one not in random_sentence_index}
 
     predict_l = list()
+    error_l = list()
     total_error = 0
     for i, s_index in enumerate(error_sentence_index):
         sentence = error_corpus[s_index]
@@ -233,15 +240,16 @@ def create_error_corpus(corpus_data, vocab,
         seg_len = 4
         predict_seg_l = []
         error_seg_l = []
+        new_error_l = [0, 0, 0]
 
+        # one sentence
         for _ in range(0, error_num+1):
-            # one sentence
             length = len(sentence)
             while True:
                 # one error
                 # set random error type
                 error_type = random.randrange(0, 3)
-                new_sentence = ''
+                n_sentence = ''
                 new_predict_seg = ''
                 new_error_seg = ''
                 while True:
@@ -256,8 +264,8 @@ def create_error_corpus(corpus_data, vocab,
                     # missing words mistake
                     nsentence = sentence[:random_pos] + sentence[random_pos+1:]
                     new_error_seg = sentence[random_pos-1] \
-                            +sentence[random_pos+1:random_pos+4]
-                    error_info = sentence[random_pos]+' -> '+ 'None' + '\t'
+                        + sentence[random_pos+1:random_pos+4]
+                    error_info = sentence[random_pos]+' -> ' + 'None' + '\t'
                 elif error_type is 1:
                     # find a word in vocabulary
                     error_word = _get_word(to_process_word_index, vocab)
@@ -297,6 +305,7 @@ def create_error_corpus(corpus_data, vocab,
                 mix_log.write(error_info)
                 sentence = nsentence
                 total_error += 1
+                new_error_l[error_type] += 1
                 break
 
         mix_log.write('\n')
@@ -304,6 +313,7 @@ def create_error_corpus(corpus_data, vocab,
             no_mix_num += 1
         error_corpus[s_index] = sentence
         predict_l.append(predict_seg_l)
+        error_l.append(new_error_l)
 
     print('Mix error %s: Done.          ' % (str(mix_percent*100)+'%'))
     pl_len = 0
@@ -313,7 +323,7 @@ def create_error_corpus(corpus_data, vocab,
     mix_log.seek(0)
     mix_log.write('Correct: {} / {}\n'.format(no_mix_num, len(corpus_data)*mix_percent))
     mix_log.close()
-    return error_corpus, corpus_data, predict_l
+    return error_corpus, corpus_data, predict_l, error_l
 
 def cutting_words(corpus, fill='_'):
     ccorpus = []
@@ -342,8 +352,8 @@ def generate_data(data_path, max_vocabulary_size):
     right_corpus = cutting_words(corpus_data)
     right_corpus = [' '.join(one) for one in right_corpus]
 
-    oerror_corpus, oright_corpus, predict_l = create_error_corpus(
-        corpus_data, vocab_l, max_error_num_in_sentence=3)
+    oerror_corpus, oright_corpus, predict_l, error_l = \
+        create_error_corpus(corpus_data, vocab_l, max_error_num_in_sentence=3)
     # insert '_' between words in each sentence
     oerror_corpus = cutting_words(oerror_corpus)
     oerror_corpus = [' '.join(one) for one in oerror_corpus]
@@ -370,13 +380,16 @@ def generate_data(data_path, max_vocabulary_size):
                                     if one not in random_sentence_index}
         error_corpus = [1 for i in range(total_sentences)]
         n_predict_l = [[] for i in range(total_sentences)]
+        n_error_l = [[] for i in range(total_sentences)]
         for i in range(total_sentences):
             if i in error_sentence_index:
                 error_corpus[i] = oerror_corpus[i]
                 n_predict_l[i] = predict_l[i]
+                n_error_l[i] = error_l[i]
             else:
                 error_corpus[i] = right_corpus[i]
                 n_predict_l[i] = []
+                n_error_l[i] = []
 
         data_len = len(error_corpus)
         # split into dev(0.2), val(0.2), train(0.6)
@@ -385,37 +398,55 @@ def generate_data(data_path, max_vocabulary_size):
         dev_error_corpus = error_corpus[0:two_split_index]
         dev_right_corpus = right_corpus[0:two_split_index]
         dev_predict_l = n_predict_l[0:two_split_index]
+        dev_error_l = n_error_l[0:two_split_index]
         val_error_corpus = error_corpus[two_split_index: four_split_index]
         val_right_corpus = right_corpus[two_split_index: four_split_index]
         val_predict_l = n_predict_l[two_split_index: four_split_index]
+        val_error_l = n_error_l[two_split_index: four_split_index]
         train_error_corpus = error_corpus[four_split_index:]
         train_right_corpus = right_corpus[four_split_index:]
         train_predict_l = n_predict_l[four_split_index:]
+        train_error_l = n_error_l[four_split_index:]
 
         # test error percent
         dev_corpus_ep = test_error_percent(dev_error_corpus, dev_right_corpus)
         avg_e_in_sen = sum([len(one) for one in dev_predict_l]) \
                        / (len(dev_error_corpus)*dev_corpus_ep)
+        miss = sum([one[0] for one in dev_error_l if len(one) >= 1])
+        extra = sum([one[1] for one in dev_error_l if len(one) >= 2])
+        wrong = sum([one [2] for one in dev_error_l if len(one) >= 3])
         max_e_in_sen = max([len(one) for one in dev_predict_l])
         log.write('========================================================\n')
         log.write('Data Set: %s\n' % (str(percent*100)+'%'))
         log.write(('Dev Corpus:\nsentence number: %d\terror percent: %.2f%%\n'+
-                   'average error in one error sentence: %.2f, max: %d\n\n')
-                 % (len(dev_error_corpus), dev_corpus_ep*100, avg_e_in_sen, max_e_in_sen))
+                   'average error in one error sentence: %.2f, max: %d\n'+
+                   'missing: %d\textra: %d\twrong: %d\n\n')
+                 % (len(dev_error_corpus), dev_corpus_ep*100,
+                    avg_e_in_sen, max_e_in_sen, miss, extra, wrong))
         val_corpus_ep = test_error_percent(val_error_corpus, val_right_corpus)
         avg_e_in_sen = sum([len(one) for one in val_predict_l]) \
                        / (len(val_error_corpus)*val_corpus_ep)
+        miss = sum([one[0] for one in val_error_l if len(one) >= 1])
+        extra = sum([one[1] for one in val_error_l if len(one) >= 2])
+        wrong = sum([one [2] for one in val_error_l if len(one) >= 3])
         max_e_in_sen = max([len(one) for one in val_predict_l])
         log.write(('Val Corpus:\nsentence number: %d\terror percent: %.2f%%\n'+
-                   'average error in one error sentence: %.2f, max: %d\n\n')
-                 % (len(val_error_corpus), val_corpus_ep*100, avg_e_in_sen, max_e_in_sen))
+                   'average error in one error sentence: %.2f, max: %d\n'+
+                   'missing: %d\textra: %d\twrong: %d\n\n')
+                 % (len(val_error_corpus), val_corpus_ep*100,
+                    avg_e_in_sen, max_e_in_sen, miss, extra, wrong))
         train_corpus_ep = test_error_percent(train_error_corpus, train_right_corpus)
         avg_e_in_sen = sum([len(one) for one in train_predict_l]) \
                        / (len(train_error_corpus)*train_corpus_ep)
+        miss = sum([one[0] for one in train_error_l if len(one) >= 1])
+        extra = sum([one[1] for one in train_error_l if len(one) >= 2])
+        wrong = sum([one [2] for one in train_error_l if len(one) >= 3])
         max_e_in_sen = max([len(one) for one in train_predict_l])
         log.write(('Train Corpus:\nsentence number: %d\terror percent: %.2f%%\n'+
-                   'average error in one error sentence: %.2f, max: %d\n\n')
-                 % (len(train_error_corpus), train_corpus_ep*100, avg_e_in_sen, max_e_in_sen))
+                   'average error in one error sentence: %.2f, max: %d\n'+
+                   'missing: %d\textra: %d\twrong: %d\n\n')
+                 % (len(train_error_corpus), train_corpus_ep*100,
+                    avg_e_in_sen, max_e_in_sen, miss, extra, wrong))
         log.write('========================================================\n\n')
 
         # save corpus
@@ -447,6 +478,15 @@ def generate_data(data_path, max_vocabulary_size):
         with open(os.path.join(
             data_dir, 'train.predict.list.json'), 'w') as f:
             json.dump(train_predict_l, f)
+        with open(os.path.join(
+            data_dir, 'dev.error.list.json'), 'w') as f:
+            json.dump(dev_error_l, f)
+        with open(os.path.join(
+            data_dir, 'val.error.list.json'), 'w') as f:
+            json.dump(val_error_l, f)
+        with open(os.path.join(
+            data_dir, 'train.error.list.json'), 'w') as f:
+            json.dump(train_error_l, f)
 
     log.close()
 
