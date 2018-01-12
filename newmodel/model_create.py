@@ -7,7 +7,7 @@ import math
 #定义相关参数
 
 HIDDEN_SIZE = 100
-NUM_LAYERS = 2
+NUM_LAYERS = 1
 VOCAB_SIZE = 100000
 
 TRAIN_BATCH_SIZE = 10
